@@ -73,10 +73,10 @@ export default function AnimalPage() {
   );
   const [result, setResult] = useState<typeof ANIMALS[number] | null>(null);
 
-  const choose = (optionScores: Record<string, number>) => {
+  const choose = (optionScores: Partial<Record<string, number>>) => {
     const next = { ...scores };
     for (const [k, v] of Object.entries(optionScores)) {
-      next[k as AnimalKey] = (next[k as AnimalKey] || 0) + v;
+      if (v !== undefined) next[k as AnimalKey] = (next[k as AnimalKey] || 0) + v;
     }
     setScores(next);
     if (step + 1 >= QUESTIONS.length) {
