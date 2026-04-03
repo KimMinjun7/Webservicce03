@@ -178,7 +178,7 @@ def refine(payload: TextRequest):
     if not hf_token:
         return TextResponse(result=payload.text, provider="mock:missing-hf-token")
 
-    model = payload.model_id.strip() if payload.model_id and payload.model_id.strip() else os.getenv("HF_REFINE_MODEL", "Qwen/Qwen3.5-4B")
+    model = payload.model_id.strip() if payload.model_id and payload.model_id.strip() else os.getenv("HF_REFINE_MODEL", "Qwen/Qwen3-4B")
     prompt = "다음 문장을 더 자연스럽고 명확하게 다듬어줘. 같은 언어로, 다듬은 문장만 출력해.\n\n문장:\n{}".format(payload.text)
     try:
         result = _call_hf_model(token=hf_token, model=model, prompt=prompt, raw_text=payload.text)
