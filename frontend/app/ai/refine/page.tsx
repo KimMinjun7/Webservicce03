@@ -8,8 +8,15 @@ import { postJson } from "@/lib/api";
 
 type TextResponse = { result: string; provider: string };
 
+const MODELS = [
+  { value: "Qwen/Qwen3-7B", label: "Qwen3-7B (한·영)" },
+  { value: "Qwen/Qwen3-14B", label: "Qwen3-14B (고품질)" },
+  { value: "Helsinki-NLP/opus-mt-ko-en", label: "OPUS-MT (한→영)" },
+];
+
 export default function RefinePage() {
   const [text, setText] = useState("");
+  const [modelId, setModelId] = useState(MODELS[0].value);
   const [result, setResult] = useState<TextResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -18,7 +25,7 @@ export default function RefinePage() {
     if (!text.trim()) return;
     setLoading(true); setError(""); setResult(null);
     try {
-      const data = await postJson<TextResponse>("/api/ai/refine", { text });
+      const data = await postJson<TextResponse>("/api/ai/refine", { text, model_id: modelId });
       setResult(data);
     } catch (e) {
       setError((e as Error).message);
@@ -40,16 +47,17 @@ export default function RefinePage() {
           <textarea rows={6} value={text} onChange={(e) => setText(e.target.value)}
             placeholder="다듬을 문장을 입력하세요" />
         </div>
+        <div className="row">
+          <label>모델</label>
+          <select value={modelId} onChange={(e) => setModelId(e.target.value)}>
+            {MODELS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+          </select>
+        </div>
         <button className="button" onClick={onSubmit} disabled={loading || !text.trim()}>
           {loading ? <><Icon name="hourglass" size={16} />처리 중...</> : "다듬기"}
         </button>
         {error && <div className="result" style={{ background: "#fee2e2", borderColor: "#fca5a5" }}>{error}</div>}
-        {result && (
-          <div className="result">
-            <div style={{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: 8 }}>[{result.provider}]</div>
-            {result.result}
-          </div>
-        )}
+        {result && <div className="result">{result.result}</div>}
       </div>
     </main>
   );

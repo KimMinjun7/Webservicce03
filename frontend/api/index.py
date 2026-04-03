@@ -24,6 +24,7 @@ class TranslateResponse(BaseModel):
 
 class TextRequest(BaseModel):
     text: str = Field(min_length=1, max_length=8000)
+    model_id: Optional[str] = Field(default="")
 
 
 class TextResponse(BaseModel):
@@ -137,25 +138,30 @@ def summarize(payload: TextRequest):
     if not hf_token:
         return TextResponse(result=payload.text[:200] + "...", provider="mock:missing-hf-token")
 
-    model = os.getenv("HF_SUMMARIZE_MODEL", "facebook/bart-large-cnn")
+    model = payload.model_id.strip() if payload.model_id and payload.model_id.strip() else os.getenv("HF_SUMMARIZE_MODEL", "facebook/bart-large-cnn")
+    is_qwen = "qwen" in model.lower()
     try:
-        body = {"inputs": payload.text, "parameters": {"max_length": 200, "min_length": 40}}
-        req = request.Request(
-            "https://router.huggingface.co/hf-inference/models/{}".format(model),
-            data=json.dumps(body).encode("utf-8"),
-            headers={
-                "Authorization": "Bearer {}".format(hf_token),
-                "Content-Type": "application/json",
-                "x-wait-for-model": "true",
-            },
-            method="POST",
-        )
-        with request.urlopen(req, timeout=60) as resp:
-            parsed = json.loads(resp.read().decode("utf-8"))
-        if isinstance(parsed, list) and parsed:
-            result = parsed[0].get("summary_text") or parsed[0].get("generated_text", "")
+        if is_qwen:
+            prompt = "다음 글을 핵심만 간결하게 요약해줘. 요약문만 출력해.\n\n글:\n{}".format(payload.text)
+            result = _call_hf_model(token=hf_token, model=model, prompt=prompt, raw_text=payload.text)
         else:
-            result = ""
+            body = {"inputs": payload.text, "parameters": {"max_length": 200, "min_length": 40}}
+            req = request.Request(
+                "https://router.huggingface.co/hf-inference/models/{}".format(model),
+                data=json.dumps(body).encode("utf-8"),
+                headers={
+                    "Authorization": "Bearer {}".format(hf_token),
+                    "Content-Type": "application/json",
+                    "x-wait-for-model": "true",
+                },
+                method="POST",
+            )
+            with request.urlopen(req, timeout=60) as resp:
+                parsed = json.loads(resp.read().decode("utf-8"))
+            if isinstance(parsed, list) and parsed:
+                result = parsed[0].get("summary_text") or parsed[0].get("generated_text", "")
+            else:
+                result = ""
         if not result:
             raise HTTPException(status_code=502, detail="empty summary output")
         return TextResponse(result=result.strip(), provider="huggingface:{}".format(model))
@@ -172,16 +178,13 @@ def refine(payload: TextRequest):
     if not hf_token:
         return TextResponse(result=payload.text, provider="mock:missing-hf-token")
 
-    model = os.getenv("HF_REFINE_MODEL", "Helsinki-NLP/opus-mt-ko-en")
-    prompt = (
-        "Rewrite the following text to be clearer, more natural, and more polished. "
-        "Keep the same language and meaning.\n\nText:\n{}".format(payload.text)
-    )
+    model = payload.model_id.strip() if payload.model_id and payload.model_id.strip() else os.getenv("HF_REFINE_MODEL", "Qwen/Qwen3-7B")
+    prompt = "다음 문장을 더 자연스럽고 명확하게 다듬어줘. 같은 언어로, 다듬은 문장만 출력해.\n\n문장:\n{}".format(payload.text)
     try:
-        translated = _call_hf_model(token=hf_token, model=model, prompt=prompt, raw_text=payload.text)
-        if not translated:
+        result = _call_hf_model(token=hf_token, model=model, prompt=prompt, raw_text=payload.text)
+        if not result:
             raise HTTPException(status_code=502, detail="empty output")
-        return TextResponse(result=translated, provider="huggingface:{}".format(model))
+        return TextResponse(result=result, provider="huggingface:{}".format(model))
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore") or "HTTP {}".format(exc.code)
         raise HTTPException(status_code=502, detail="huggingface error: {}".format(detail)) from exc
