@@ -9,7 +9,7 @@ import { postJson } from "@/lib/api";
 type TextResponse = { result: string; provider: string };
 
 const MODELS = [
-  { value: "Qwen/Qwen3-7B", label: "Qwen3-7B (한·영)" },
+  { value: "Qwen/Qwen3.5-4B", label: "Qwen3.5-4B (한·영)" },
   { value: "Qwen/Qwen3-14B", label: "Qwen3-14B (고품질)" },
   { value: "Helsinki-NLP/opus-mt-ko-en", label: "OPUS-MT (한→영)" },
 ];
