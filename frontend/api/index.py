@@ -1,14 +1,37 @@
 import os
 import json
+from typing import Optional
 from datetime import date, datetime
 from urllib import error, request
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from korean_lunar_calendar import KoreanLunarCalendar
+from pydantic import BaseModel, Field
 
-from schemas import TranslateRequest, TranslateResponse, TextRequest, TextResponse
 
+# ── Schemas ──────────────────────────────────────────────
+class TranslateRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=5000)
+    target_lang: str = Field(default="en", min_length=2, max_length=10)
+    source_lang: Optional[str] = Field(default=None, max_length=10)
+
+
+class TranslateResponse(BaseModel):
+    translated_text: str
+    provider: str
+
+
+class TextRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=8000)
+
+
+class TextResponse(BaseModel):
+    result: str
+    provider: str
+
+
+# ── App ──────────────────────────────────────────────────
 app = FastAPI(title="All-in-One Utility API", version="0.1.0")
 
 allowed_origins_env = os.getenv("ALLOWED_ORIGINS", "*")
@@ -23,6 +46,7 @@ app.add_middleware(
 )
 
 
+# ── Routes ───────────────────────────────────────────────
 @app.get("/api/health")
 def health():
     return {"status": "ok", "service": "all-in-one-utility-backend"}
@@ -45,7 +69,7 @@ def get_dday(target: str = Query(..., description="YYYY-MM-DD")):
     target_dt = _parse_date_or_400(target, "target")
     today = date.today()
     diff = (target_dt - today).days
-    label = f"D-{diff}" if diff >= 0 else f"D+{abs(diff)}"
+    label = "D-{}".format(diff) if diff >= 0 else "D+{}".format(abs(diff))
     return {
         "today": today.isoformat(),
         "target": target_dt.isoformat(),
@@ -82,9 +106,7 @@ def convert_lunar_solar(
             "is_leap_month": cal.isIntercalation,
         }
 
-    success = cal.setLunarDate(
-        input_dt.year, input_dt.month, input_dt.day, is_leap_month
-    )
+    success = cal.setLunarDate(input_dt.year, input_dt.month, input_dt.day, is_leap_month)
     if not success:
         raise HTTPException(status_code=400, detail="invalid lunar date")
     return {
@@ -119,10 +141,10 @@ def summarize(payload: TextRequest):
     try:
         body = {"inputs": payload.text, "parameters": {"max_length": 200, "min_length": 40}}
         req = request.Request(
-            f"https://router.huggingface.co/hf-inference/models/{model}",
+            "https://router.huggingface.co/hf-inference/models/{}".format(model),
             data=json.dumps(body).encode("utf-8"),
             headers={
-                "Authorization": f"Bearer {hf_token}",
+                "Authorization": "Bearer {}".format(hf_token),
                 "Content-Type": "application/json",
                 "x-wait-for-model": "true",
             },
@@ -136,12 +158,12 @@ def summarize(payload: TextRequest):
             result = ""
         if not result:
             raise HTTPException(status_code=502, detail="empty summary output")
-        return TextResponse(result=result.strip(), provider=f"huggingface:{model}")
+        return TextResponse(result=result.strip(), provider="huggingface:{}".format(model))
     except error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="ignore") or f"HTTP {exc.code}"
-        raise HTTPException(status_code=502, detail=f"huggingface error: {detail}") from exc
+        detail = exc.read().decode("utf-8", errors="ignore") or "HTTP {}".format(exc.code)
+        raise HTTPException(status_code=502, detail="huggingface error: {}".format(detail)) from exc
     except error.URLError as exc:
-        raise HTTPException(status_code=502, detail=f"huggingface connection failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail="huggingface connection failed: {}".format(exc)) from exc
 
 
 @app.post("/api/ai/refine", response_model=TextResponse)
@@ -153,21 +175,20 @@ def refine(payload: TextRequest):
     model = os.getenv("HF_REFINE_MODEL", "Helsinki-NLP/opus-mt-ko-en")
     prompt = (
         "Rewrite the following text to be clearer, more natural, and more polished. "
-        "Keep the same language and meaning.\n\n"
-        f"Text:\n{payload.text}"
+        "Keep the same language and meaning.\n\nText:\n{}".format(payload.text)
     )
     try:
         translated = _call_hf_model(token=hf_token, model=model, prompt=prompt, raw_text=payload.text)
         if not translated:
             raise HTTPException(status_code=502, detail="empty output")
-        return TextResponse(result=translated, provider=f"huggingface:{model}")
+        return TextResponse(result=translated, provider="huggingface:{}".format(model))
     except error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="ignore") or f"HTTP {exc.code}"
-        raise HTTPException(status_code=502, detail=f"huggingface error: {detail}") from exc
+        detail = exc.read().decode("utf-8", errors="ignore") or "HTTP {}".format(exc.code)
+        raise HTTPException(status_code=502, detail="huggingface error: {}".format(detail)) from exc
     except error.URLError as exc:
-        raise HTTPException(status_code=502, detail=f"huggingface connection failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail="huggingface connection failed: {}".format(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"refine failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail="refine failed: {}".format(exc)) from exc
 
 
 @app.post("/api/ai/translate", response_model=TranslateResponse)
@@ -175,7 +196,7 @@ def translate(payload: TranslateRequest):
     hf_token = _normalize_hf_token(os.getenv("HF_API_TOKEN"))
     if not hf_token:
         return TranslateResponse(
-            translated_text=f"[dev-fallback:{payload.target_lang}] {payload.text}",
+            translated_text="[dev-fallback:{}] {}".format(payload.target_lang, payload.text),
             provider="mock:missing-hf-token",
         )
 
@@ -183,10 +204,8 @@ def translate(payload: TranslateRequest):
     source_lang = payload.source_lang or "auto"
     prompt = (
         "Translate the following text.\n"
-        f"Source language: {source_lang}\n"
-        f"Target language: {payload.target_lang}\n"
-        "Return translated text only.\n\n"
-        f"Text:\n{payload.text}"
+        "Source language: {}\nTarget language: {}\n"
+        "Return translated text only.\n\nText:\n{}".format(source_lang, payload.target_lang, payload.text)
     )
 
     candidate_models = [model]
@@ -200,39 +219,36 @@ def translate(payload: TranslateRequest):
             is_marian = "opus-mt" in candidate_model
             if is_marian:
                 chunks = _split_text(payload.text)
-                parts = []
-                for chunk in chunks:
-                    part = _call_hf_model(token=hf_token, model=candidate_model, prompt=prompt, raw_text=chunk)
-                    if part:
-                        parts.append(part)
+                parts = [p for p in (_call_hf_model(token=hf_token, model=candidate_model, prompt=prompt, raw_text=c) for c in chunks) if p]
                 translated = " ".join(parts)
             else:
                 translated = _call_hf_model(token=hf_token, model=candidate_model, prompt=prompt, raw_text=payload.text)
             if translated:
-                return TranslateResponse(translated_text=translated, provider=f"huggingface:{candidate_model}")
+                return TranslateResponse(translated_text=translated, provider="huggingface:{}".format(candidate_model))
             last_error = "empty translation output"
         except error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="ignore") or f"HTTP {exc.code}"
+            detail = exc.read().decode("utf-8", errors="ignore") or "HTTP {}".format(exc.code)
             if exc.code == 404:
-                last_error = f"{candidate_model} not found on hf-inference"
+                last_error = "{} not found".format(candidate_model)
                 continue
-            raise HTTPException(status_code=502, detail=f"huggingface error: {detail}") from exc
+            raise HTTPException(status_code=502, detail="huggingface error: {}".format(detail)) from exc
         except error.URLError as exc:
-            raise HTTPException(status_code=502, detail=f"huggingface connection failed: {exc}") from exc
+            raise HTTPException(status_code=502, detail="huggingface connection failed: {}".format(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"translation failed: {exc}") from exc
+            raise HTTPException(status_code=502, detail="translation failed: {}".format(exc)) from exc
 
-    raise HTTPException(status_code=502, detail=f"huggingface error: {last_error}")
+    raise HTTPException(status_code=502, detail="huggingface error: {}".format(last_error))
 
 
-def _parse_date_or_400(raw: str, field_name: str) -> date:
+# ── Helpers ──────────────────────────────────────────────
+def _parse_date_or_400(raw, field_name):
     try:
         return datetime.strptime(raw, "%Y-%m-%d").date()
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"invalid {field_name} format, use YYYY-MM-DD") from exc
+        raise HTTPException(status_code=400, detail="invalid {} format, use YYYY-MM-DD".format(field_name)) from exc
 
 
-def _normalize_hf_token(raw: str | None) -> str:
+def _normalize_hf_token(raw):
     if not raw:
         return ""
     token = raw.strip().strip('"').strip("'")
@@ -241,7 +257,7 @@ def _normalize_hf_token(raw: str | None) -> str:
     return token
 
 
-def _split_text(text: str, max_chars: int = 400) -> list[str]:
+def _split_text(text, max_chars=400):
     import re
     sentences = re.split(r"(?<=[.!?。！？\n])\s*", text.strip())
     chunks, current = [], ""
@@ -258,7 +274,7 @@ def _split_text(text: str, max_chars: int = 400) -> list[str]:
     return chunks or [text]
 
 
-def _select_pair_translation_model(source_lang: str, target_lang: str) -> str:
+def _select_pair_translation_model(source_lang, target_lang):
     src = source_lang.lower().strip()
     tgt = target_lang.lower().strip()
     if src in ("ko", "korean", "auto") and tgt == "en":
@@ -268,21 +284,18 @@ def _select_pair_translation_model(source_lang: str, target_lang: str) -> str:
     return ""
 
 
-def _call_hf_model(token: str, model: str, prompt: str, raw_text: str = "") -> str:
-    url = f"https://router.huggingface.co/hf-inference/models/{model}"
+def _call_hf_model(token, model, prompt, raw_text=""):
+    url = "https://router.huggingface.co/hf-inference/models/{}".format(model)
     is_marian = "opus-mt" in model
-    if is_marian:
-        body: dict = {"inputs": raw_text or prompt}
-    else:
-        body = {
-            "inputs": prompt,
-            "parameters": {"max_new_tokens": 512, "temperature": 0.2, "return_full_text": False},
-        }
+    body = {"inputs": raw_text or prompt} if is_marian else {
+        "inputs": prompt,
+        "parameters": {"max_new_tokens": 512, "temperature": 0.2, "return_full_text": False},
+    }
     req = request.Request(
         url,
         data=json.dumps(body).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {token}",
+            "Authorization": "Bearer {}".format(token),
             "Content-Type": "application/json",
             "x-wait-for-model": "true",
         },
@@ -294,7 +307,7 @@ def _call_hf_model(token: str, model: str, prompt: str, raw_text: str = "") -> s
     return _extract_hf_translation(parsed)
 
 
-def _extract_hf_translation(parsed: object) -> str:
+def _extract_hf_translation(parsed):
     if isinstance(parsed, list) and parsed:
         first = parsed[0]
         if isinstance(first, dict):
