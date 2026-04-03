@@ -1,4 +1,6 @@
-const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+// 로컬: NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+// Vercel: 환경변수 미설정 시 같은 도메인(/api/...)으로 요청
+const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
 export async function getJson<T>(path: string): Promise<T> {
   const res = await fetch(`${baseUrl}${path}`, { cache: "no-store" });
