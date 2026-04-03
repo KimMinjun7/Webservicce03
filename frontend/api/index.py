@@ -287,7 +287,37 @@ def _select_pair_translation_model(source_lang, target_lang):
     return ""
 
 
+def _is_chat_model(model):
+    m = model.lower()
+    return "qwen" in m or "instruct" in m or "chat" in m
+
+
+def _call_hf_chat(token, model, prompt):
+    """HuggingFace OpenAI 호환 채팅 API (Qwen 등 instruction 모델용)"""
+    url = "https://router.huggingface.co/hf-inference/v1/chat/completions"
+    body = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "max_tokens": 1024,
+        "temperature": 0.3,
+    }
+    req = request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Authorization": "Bearer {}".format(token),
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with request.urlopen(req, timeout=60) as resp:
+        parsed = json.loads(resp.read().decode("utf-8"))
+    return parsed.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+
+
 def _call_hf_model(token, model, prompt, raw_text=""):
+    if _is_chat_model(model):
+        return _call_hf_chat(token, model, prompt)
     url = "https://router.huggingface.co/hf-inference/models/{}".format(model)
     is_marian = "opus-mt" in model
     body = {"inputs": raw_text or prompt} if is_marian else {
