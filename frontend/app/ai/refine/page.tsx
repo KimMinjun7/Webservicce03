@@ -9,11 +9,11 @@ import { postJson } from "@/lib/api";
 type TextResponse = { result: string; provider: string };
 
 const MODELS = [
-  { value: "Qwen/Qwen3-0.6B", label: "Qwen3-0.6B (빠름)" },
-  { value: "Qwen/Qwen3-4B", label: "Qwen3-4B" },
-  { value: "Qwen/Qwen3-4B-Instruct-2507", label: "Qwen3-4B-Instruct" },
-  { value: "Qwen/Qwen3-8B", label: "Qwen3-8B (고품질)" },
-  { value: "Helsinki-NLP/opus-mt-ko-en", label: "OPUS-MT (한→영)" },
+  { value: "llama-3.1-8b-instant", label: "Llama 3.1 8B (빠름) — Groq" },
+  { value: "llama-3.3-70b-versatile", label: "Llama 3.3 70B (고품질) — Groq" },
+  { value: "llama3-8b-8192", label: "Llama 3 8B 8K — Groq" },
+  { value: "gemma2-9b-it", label: "Gemma2 9B — Groq" },
+  { value: "mixtral-8x7b-32768", label: "Mixtral 8x7B — Groq" },
 ];
 
 export default function RefinePage() {

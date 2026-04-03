@@ -134,113 +134,77 @@ def get_weekday(target: str = Query(..., description="YYYY-MM-DD")):
 
 @app.post("/api/ai/summarize", response_model=TextResponse)
 def summarize(payload: TextRequest):
-    hf_token = _normalize_hf_token(os.getenv("HF_API_TOKEN"))
-    if not hf_token:
-        return TextResponse(result=payload.text[:200] + "...", provider="mock:missing-hf-token")
+    groq_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not groq_key:
+        return TextResponse(result=payload.text[:200] + "...", provider="mock:missing-groq-token")
 
-    model = payload.model_id.strip() if payload.model_id and payload.model_id.strip() else os.getenv("HF_SUMMARIZE_MODEL", "facebook/bart-large-cnn")
-    is_qwen = "qwen" in model.lower()
+    model = payload.model_id.strip() if payload.model_id and payload.model_id.strip() else os.getenv("GROQ_SUMMARIZE_MODEL", "llama-3.1-8b-instant")
+    _validate_groq_model(model)
     try:
-        if is_qwen:
-            prompt = "다음 글을 핵심만 간결하게 요약해줘. 요약문만 출력해.\n\n글:\n{}".format(payload.text)
-            result = _call_hf_model(token=hf_token, model=model, prompt=prompt, raw_text=payload.text)
-        else:
-            body = {"inputs": payload.text, "parameters": {"max_length": 200, "min_length": 40}}
-            req = request.Request(
-                "https://router.huggingface.co/hf-inference/models/{}".format(model),
-                data=json.dumps(body).encode("utf-8"),
-                headers={
-                    "Authorization": "Bearer {}".format(hf_token),
-                    "Content-Type": "application/json",
-                    "x-wait-for-model": "true",
-                },
-                method="POST",
-            )
-            with request.urlopen(req, timeout=60) as resp:
-                parsed = json.loads(resp.read().decode("utf-8"))
-            if isinstance(parsed, list) and parsed:
-                result = parsed[0].get("summary_text") or parsed[0].get("generated_text", "")
-            else:
-                result = ""
+        prompt = "다음 글을 핵심만 간결하게 요약해줘. 요약문만 출력해.\n\n글:\n{}".format(payload.text)
+        result = _call_groq(model, prompt)
         if not result:
             raise HTTPException(status_code=502, detail="empty summary output")
-        return TextResponse(result=result.strip(), provider="huggingface:{}".format(model))
+        return TextResponse(result=result.strip(), provider="groq:{}".format(model))
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore") or "HTTP {}".format(exc.code)
-        raise HTTPException(status_code=502, detail="huggingface error: {}".format(detail)) from exc
+        raise HTTPException(status_code=502, detail="groq error: {}".format(detail)) from exc
     except error.URLError as exc:
-        raise HTTPException(status_code=502, detail="huggingface connection failed: {}".format(exc)) from exc
+        raise HTTPException(status_code=502, detail="groq connection failed: {}".format(exc)) from exc
 
 
 @app.post("/api/ai/refine", response_model=TextResponse)
 def refine(payload: TextRequest):
-    hf_token = _normalize_hf_token(os.getenv("HF_API_TOKEN"))
-    if not hf_token:
-        return TextResponse(result=payload.text, provider="mock:missing-hf-token")
+    groq_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not groq_key:
+        return TextResponse(result=payload.text, provider="mock:missing-groq-token")
 
-    model = payload.model_id.strip() if payload.model_id and payload.model_id.strip() else os.getenv("HF_REFINE_MODEL", "Qwen/Qwen3-4B")
+    model = payload.model_id.strip() if payload.model_id and payload.model_id.strip() else os.getenv("GROQ_REFINE_MODEL", "llama-3.1-8b-instant")
+    _validate_groq_model(model)
     prompt = "다음 문장을 더 자연스럽고 명확하게 다듬어줘. 같은 언어로, 다듬은 문장만 출력해.\n\n문장:\n{}".format(payload.text)
     try:
-        result = _call_hf_model(token=hf_token, model=model, prompt=prompt, raw_text=payload.text)
+        result = _call_groq(model, prompt)
         if not result:
             raise HTTPException(status_code=502, detail="empty output")
-        return TextResponse(result=result, provider="huggingface:{}".format(model))
+        return TextResponse(result=result, provider="groq:{}".format(model))
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore") or "HTTP {}".format(exc.code)
-        raise HTTPException(status_code=502, detail="huggingface error: {}".format(detail)) from exc
+        raise HTTPException(status_code=502, detail="groq error: {}".format(detail)) from exc
     except error.URLError as exc:
-        raise HTTPException(status_code=502, detail="huggingface connection failed: {}".format(exc)) from exc
+        raise HTTPException(status_code=502, detail="groq connection failed: {}".format(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail="refine failed: {}".format(exc)) from exc
 
 
 @app.post("/api/ai/translate", response_model=TranslateResponse)
 def translate(payload: TranslateRequest):
-    hf_token = _normalize_hf_token(os.getenv("HF_API_TOKEN"))
-    if not hf_token:
+    groq_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not groq_key:
         return TranslateResponse(
             translated_text="[dev-fallback:{}] {}".format(payload.target_lang, payload.text),
-            provider="mock:missing-hf-token",
+            provider="mock:missing-groq-token",
         )
 
-    model = os.getenv("HF_TRANSLATION_MODEL", "Helsinki-NLP/opus-mt-ko-en")
+    model = os.getenv("GROQ_TRANSLATION_MODEL", "llama-3.1-8b-instant")
+    _validate_groq_model(model)
     source_lang = payload.source_lang or "auto"
     prompt = (
         "Translate the following text.\n"
         "Source language: {}\nTarget language: {}\n"
         "Return translated text only.\n\nText:\n{}".format(source_lang, payload.target_lang, payload.text)
     )
-
-    candidate_models = [model]
-    pair_model = _select_pair_translation_model(source_lang=source_lang, target_lang=payload.target_lang)
-    if pair_model and pair_model not in candidate_models:
-        candidate_models.append(pair_model)
-
-    last_error = "unknown"
-    for candidate_model in candidate_models:
-        try:
-            is_marian = "opus-mt" in candidate_model
-            if is_marian:
-                chunks = _split_text(payload.text)
-                parts = [p for p in (_call_hf_model(token=hf_token, model=candidate_model, prompt=prompt, raw_text=c) for c in chunks) if p]
-                translated = " ".join(parts)
-            else:
-                translated = _call_hf_model(token=hf_token, model=candidate_model, prompt=prompt, raw_text=payload.text)
-            if translated:
-                return TranslateResponse(translated_text=translated, provider="huggingface:{}".format(candidate_model))
-            last_error = "empty translation output"
-        except error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="ignore") or "HTTP {}".format(exc.code)
-            if exc.code == 404:
-                last_error = "{} not found".format(candidate_model)
-                continue
-            raise HTTPException(status_code=502, detail="huggingface error: {}".format(detail)) from exc
-        except error.URLError as exc:
-            raise HTTPException(status_code=502, detail="huggingface connection failed: {}".format(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail="translation failed: {}".format(exc)) from exc
-
-    raise HTTPException(status_code=502, detail="huggingface error: {}".format(last_error))
+    try:
+        translated = _call_groq(model, prompt)
+        if not translated:
+            raise HTTPException(status_code=502, detail="empty translation output")
+        return TranslateResponse(translated_text=translated, provider="groq:{}".format(model))
+    except error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore") or "HTTP {}".format(exc.code)
+        raise HTTPException(status_code=502, detail="groq error: {}".format(detail)) from exc
+    except error.URLError as exc:
+        raise HTTPException(status_code=502, detail="groq connection failed: {}".format(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="translation failed: {}".format(exc)) from exc
 
 
 # ── Helpers ──────────────────────────────────────────────
@@ -251,50 +215,24 @@ def _parse_date_or_400(raw, field_name):
         raise HTTPException(status_code=400, detail="invalid {} format, use YYYY-MM-DD".format(field_name)) from exc
 
 
-def _normalize_hf_token(raw):
-    if not raw:
-        return ""
-    token = raw.strip().strip('"').strip("'")
-    if token.lower().startswith("bearer "):
-        token = token[7:].strip()
-    return token
+GROQ_MODELS = {
+    "llama-3.1-8b-instant",
+    "llama-3.3-70b-versatile",
+    "llama3-8b-8192",
+    "gemma2-9b-it",
+    "mixtral-8x7b-32768",
+}
 
 
-def _split_text(text, max_chars=400):
-    import re
-    sentences = re.split(r"(?<=[.!?。！？\n])\s*", text.strip())
-    chunks, current = [], ""
-    for sent in sentences:
-        if not sent:
-            continue
-        if len(current) + len(sent) + 1 > max_chars and current:
-            chunks.append(current.strip())
-            current = sent
-        else:
-            current = (current + " " + sent).strip() if current else sent
-    if current:
-        chunks.append(current.strip())
-    return chunks or [text]
+def _validate_groq_model(model):
+    if model not in GROQ_MODELS:
+        raise HTTPException(status_code=400, detail="unsupported model: {}".format(model))
 
 
-def _select_pair_translation_model(source_lang, target_lang):
-    src = source_lang.lower().strip()
-    tgt = target_lang.lower().strip()
-    if src in ("ko", "korean", "auto") and tgt == "en":
-        return "Helsinki-NLP/opus-mt-ko-en"
-    if src == "en" and tgt in ("ko", "korean"):
-        return "Helsinki-NLP/opus-mt-en-ko"
-    return ""
-
-
-def _is_chat_model(model):
-    m = model.lower()
-    return "qwen" in m or "instruct" in m or "chat" in m
-
-
-def _call_hf_chat(token, model, prompt):
-    """HuggingFace OpenAI 호환 채팅 API (Qwen 등 instruction 모델용)"""
-    url = "https://router.huggingface.co/hf-inference/v1/chat/completions"
+def _call_groq(model, prompt):
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    if not groq_key:
+        raise HTTPException(status_code=502, detail="GROQ_API_KEY not set")
     body = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -302,10 +240,10 @@ def _call_hf_chat(token, model, prompt):
         "temperature": 0.3,
     }
     req = request.Request(
-        url,
+        "https://api.groq.com/openai/v1/chat/completions",
         data=json.dumps(body).encode("utf-8"),
         headers={
-            "Authorization": "Bearer {}".format(token),
+            "Authorization": "Bearer {}".format(groq_key),
             "Content-Type": "application/json",
         },
         method="POST",
@@ -314,43 +252,3 @@ def _call_hf_chat(token, model, prompt):
         parsed = json.loads(resp.read().decode("utf-8"))
     return parsed.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
-
-def _call_hf_model(token, model, prompt, raw_text=""):
-    if _is_chat_model(model):
-        return _call_hf_chat(token, model, prompt)
-    url = "https://router.huggingface.co/hf-inference/models/{}".format(model)
-    is_marian = "opus-mt" in model
-    body = {"inputs": raw_text or prompt} if is_marian else {
-        "inputs": prompt,
-        "parameters": {"max_new_tokens": 512, "temperature": 0.2, "return_full_text": False},
-    }
-    req = request.Request(
-        url,
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "Authorization": "Bearer {}".format(token),
-            "Content-Type": "application/json",
-            "x-wait-for-model": "true",
-        },
-        method="POST",
-    )
-    with request.urlopen(req, timeout=60) as resp:
-        raw = resp.read().decode("utf-8")
-    parsed = json.loads(raw)
-    return _extract_hf_translation(parsed)
-
-
-def _extract_hf_translation(parsed):
-    if isinstance(parsed, list) and parsed:
-        first = parsed[0]
-        if isinstance(first, dict):
-            if "translation_text" in first and isinstance(first["translation_text"], str):
-                return first["translation_text"].strip()
-            if "generated_text" in first and isinstance(first["generated_text"], str):
-                return first["generated_text"].strip()
-    if isinstance(parsed, dict):
-        if "generated_text" in parsed and isinstance(parsed["generated_text"], str):
-            return parsed["generated_text"].strip()
-        if "translation_text" in parsed and isinstance(parsed["translation_text"], str):
-            return parsed["translation_text"].strip()
-    return ""

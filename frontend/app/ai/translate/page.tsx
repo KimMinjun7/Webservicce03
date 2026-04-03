@@ -55,7 +55,6 @@ export default function TranslatePage() {
         {error && <div className="result" style={{ background: "#fee2e2", borderColor: "#fca5a5" }}>{error}</div>}
         {result && (
           <div className="result">
-            <div style={{ fontSize: "0.8rem", color: "var(--muted)", marginBottom: 8 }}>[{result.provider}]</div>
             {result.translated_text}
           </div>
         )}
