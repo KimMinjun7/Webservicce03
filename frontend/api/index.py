@@ -1,5 +1,6 @@
 import os
 import json
+import threading
 from typing import Optional
 from datetime import date, datetime
 from urllib import error, request
@@ -8,6 +9,15 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from korean_lunar_calendar import KoreanLunarCalendar
 from pydantic import BaseModel, Field
+
+DEFAULT_HTTP_HEADERS = {
+    "Content-Type": "application/json",
+    "Accept": "application/json",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36",
+}
+
+_PIPELINE_CACHE = {}
+_PIPELINE_LOCK = threading.Lock()
 
 
 # ── Schemas ──────────────────────────────────────────────
@@ -134,59 +144,60 @@ def get_weekday(target: str = Query(..., description="YYYY-MM-DD")):
 
 @app.post("/api/ai/summarize", response_model=TextResponse)
 def summarize(payload: TextRequest):
-    groq_key = os.getenv("GROQ_API_KEY", "").strip()
-    if not groq_key:
-        return TextResponse(result=payload.text[:200] + "...", provider="mock:missing-groq-token")
-
-    model = payload.model_id.strip() if payload.model_id and payload.model_id.strip() else os.getenv("GROQ_SUMMARIZE_MODEL", "llama-3.1-8b-instant")
-    _validate_groq_model(model)
+    provider, model = _resolve_text_provider(
+        requested_model=payload.model_id,
+        env_key="SUMMARIZE_MODEL",
+        default_local="Qwen/Qwen3-0.6B",
+        default_groq="llama-3.1-8b-instant",
+    )
     try:
         prompt = "다음 글을 핵심만 간결하게 요약해줘. 요약문만 출력해.\n\n글:\n{}".format(payload.text)
-        result = _call_groq(model, prompt)
+        result = _call_model(provider, model, prompt)
         if not result:
             raise HTTPException(status_code=502, detail="empty summary output")
-        return TextResponse(result=result.strip(), provider="groq:{}".format(model))
+        return TextResponse(result=result.strip(), provider="{}:{}".format(provider, model))
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore") or "HTTP {}".format(exc.code)
-        raise HTTPException(status_code=502, detail="groq error: {}".format(detail)) from exc
+        raise HTTPException(status_code=502, detail="{} error: {}".format(provider, detail)) from exc
     except error.URLError as exc:
-        raise HTTPException(status_code=502, detail="groq connection failed: {}".format(exc)) from exc
+        raise HTTPException(status_code=502, detail="{} connection failed: {}".format(provider, exc)) from exc
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.post("/api/ai/refine", response_model=TextResponse)
 def refine(payload: TextRequest):
-    groq_key = os.getenv("GROQ_API_KEY", "").strip()
-    if not groq_key:
-        return TextResponse(result=payload.text, provider="mock:missing-groq-token")
-
-    model = payload.model_id.strip() if payload.model_id and payload.model_id.strip() else os.getenv("GROQ_REFINE_MODEL", "llama-3.1-8b-instant")
-    _validate_groq_model(model)
+    provider, model = _resolve_text_provider(
+        requested_model=payload.model_id,
+        env_key="REFINE_MODEL",
+        default_local="Qwen/Qwen3-0.6B",
+        default_groq="llama-3.1-8b-instant",
+    )
     prompt = "다음 문장을 더 자연스럽고 명확하게 다듬어줘. 같은 언어로, 다듬은 문장만 출력해.\n\n문장:\n{}".format(payload.text)
     try:
-        result = _call_groq(model, prompt)
+        result = _call_model(provider, model, prompt)
         if not result:
             raise HTTPException(status_code=502, detail="empty output")
-        return TextResponse(result=result, provider="groq:{}".format(model))
+        return TextResponse(result=result, provider="{}:{}".format(provider, model))
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore") or "HTTP {}".format(exc.code)
-        raise HTTPException(status_code=502, detail="groq error: {}".format(detail)) from exc
+        raise HTTPException(status_code=502, detail="{} error: {}".format(provider, detail)) from exc
     except error.URLError as exc:
-        raise HTTPException(status_code=502, detail="groq connection failed: {}".format(exc)) from exc
+        raise HTTPException(status_code=502, detail="{} connection failed: {}".format(provider, exc)) from exc
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail="refine failed: {}".format(exc)) from exc
 
 
 @app.post("/api/ai/translate", response_model=TranslateResponse)
 def translate(payload: TranslateRequest):
-    groq_key = os.getenv("GROQ_API_KEY", "").strip()
-    if not groq_key:
-        return TranslateResponse(
-            translated_text="[dev-fallback:{}] {}".format(payload.target_lang, payload.text),
-            provider="mock:missing-groq-token",
-        )
-
-    model = os.getenv("GROQ_TRANSLATION_MODEL", "llama-3.1-8b-instant")
-    _validate_groq_model(model)
+    provider, model = _resolve_text_provider(
+        requested_model="",
+        env_key="TRANSLATION_MODEL",
+        default_local="Qwen/Qwen3-0.6B",
+        default_groq="llama-3.1-8b-instant",
+    )
     source_lang = payload.source_lang or "auto"
     prompt = (
         "Translate the following text.\n"
@@ -194,15 +205,17 @@ def translate(payload: TranslateRequest):
         "Return translated text only.\n\nText:\n{}".format(source_lang, payload.target_lang, payload.text)
     )
     try:
-        translated = _call_groq(model, prompt)
+        translated = _call_model(provider, model, prompt)
         if not translated:
             raise HTTPException(status_code=502, detail="empty translation output")
-        return TranslateResponse(translated_text=translated, provider="groq:{}".format(model))
+        return TranslateResponse(translated_text=translated, provider="{}:{}".format(provider, model))
     except error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="ignore") or "HTTP {}".format(exc.code)
-        raise HTTPException(status_code=502, detail="groq error: {}".format(detail)) from exc
+        raise HTTPException(status_code=502, detail="{} error: {}".format(provider, detail)) from exc
     except error.URLError as exc:
-        raise HTTPException(status_code=502, detail="groq connection failed: {}".format(exc)) from exc
+        raise HTTPException(status_code=502, detail="{} connection failed: {}".format(provider, exc)) from exc
+    except ImportError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=502, detail="translation failed: {}".format(exc)) from exc
 
@@ -229,6 +242,48 @@ def _validate_groq_model(model):
         raise HTTPException(status_code=400, detail="unsupported model: {}".format(model))
 
 
+def _resolve_text_provider(requested_model, env_key, default_local, default_groq):
+    requested_model = (requested_model or "").strip()
+    preferred_provider = os.getenv("AI_PROVIDER", "").strip().lower()
+    local_enabled = os.getenv("LOCAL_MODEL_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+    groq_key = os.getenv("GROQ_API_KEY", "").strip()
+
+    if requested_model:
+        if requested_model in GROQ_MODELS:
+            if not groq_key:
+                raise HTTPException(status_code=502, detail="GROQ_API_KEY not set")
+            return "groq", requested_model
+        return "local", requested_model
+
+    if preferred_provider == "groq":
+        if not groq_key:
+            raise HTTPException(status_code=502, detail="GROQ_API_KEY not set")
+        model = os.getenv("GROQ_{}".format(env_key), default_groq)
+        _validate_groq_model(model)
+        return "groq", model
+
+    if preferred_provider == "local" and local_enabled:
+        return "local", os.getenv("LOCAL_{}".format(env_key), default_local)
+
+    if groq_key:
+        model = os.getenv("GROQ_{}".format(env_key), default_groq)
+        _validate_groq_model(model)
+        return "groq", model
+
+    if local_enabled:
+        return "local", os.getenv("LOCAL_{}".format(env_key), default_local)
+
+    raise HTTPException(status_code=502, detail="no AI provider configured")
+
+
+def _call_model(provider, model, prompt):
+    if provider == "groq":
+        return _call_groq(model, prompt)
+    if provider == "local":
+        return _call_local_pipeline(model, prompt)
+    raise HTTPException(status_code=400, detail="unsupported provider: {}".format(provider))
+
+
 def _call_groq(model, prompt):
     groq_key = os.getenv("GROQ_API_KEY", "")
     if not groq_key:
@@ -244,7 +299,7 @@ def _call_groq(model, prompt):
         data=json.dumps(body).encode("utf-8"),
         headers={
             "Authorization": "Bearer {}".format(groq_key),
-            "Content-Type": "application/json",
+            **DEFAULT_HTTP_HEADERS,
         },
         method="POST",
     )
@@ -252,3 +307,48 @@ def _call_groq(model, prompt):
         parsed = json.loads(resp.read().decode("utf-8"))
     return parsed.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
 
+
+def _get_local_pipeline(model):
+    with _PIPELINE_LOCK:
+        if model in _PIPELINE_CACHE:
+            return _PIPELINE_CACHE[model]
+
+        try:
+            from transformers import pipeline
+        except ImportError as exc:
+            raise ImportError("local model requires transformers (and torch) to be installed") from exc
+
+        pipeline_kwargs = {
+            "task": "text-generation",
+            "model": model,
+        }
+        device_pref = os.getenv("LOCAL_MODEL_DEVICE", "").strip().lower()
+        if device_pref == "auto":
+            pipeline_kwargs["device_map"] = "auto"
+        pipe = pipeline(**pipeline_kwargs)
+        _PIPELINE_CACHE[model] = pipe
+        return pipe
+
+
+def _call_local_pipeline(model, prompt):
+    pipe = _get_local_pipeline(model)
+    messages = [{"role": "user", "content": prompt}]
+    outputs = pipe(
+        messages,
+        max_new_tokens=int(os.getenv("LOCAL_MAX_NEW_TOKENS", "512")),
+        do_sample=False,
+    )
+
+    if not outputs:
+        return ""
+
+    first = outputs[0]
+    if isinstance(first, dict):
+        generated = first.get("generated_text")
+        if isinstance(generated, list) and generated:
+            last = generated[-1]
+            if isinstance(last, dict):
+                return str(last.get("content", "")).strip()
+        if isinstance(generated, str):
+            return generated.strip()
+    return str(first).strip()

@@ -15,7 +15,8 @@
   - D-Day 계산
   - 퍼센트 계산
 - AI
-  - 번역 (Hugging Face Router + HF Inference)
+  - 번역 / 요약 / 문장 다듬기
+  - 로컬 `Qwen/Qwen3-0.6B` 또는 Groq 사용 가능
 
 ## 빠른 실행
 
@@ -48,8 +49,14 @@ npm run dev
 ### backend/.env
 
 ```env
-HF_API_TOKEN=your_huggingface_token
-HF_TRANSLATION_MODEL=Helsinki-NLP/opus-mt-ko-en
+AI_PROVIDER=local
+LOCAL_MODEL_ENABLED=true
+LOCAL_SUMMARIZE_MODEL=Qwen/Qwen3-0.6B
+LOCAL_REFINE_MODEL=Qwen/Qwen3-0.6B
+LOCAL_TRANSLATION_MODEL=Qwen/Qwen3-0.6B
+LOCAL_MAX_NEW_TOKENS=512
+LOCAL_MODEL_DEVICE=
+GROQ_API_KEY=
 ALLOWED_ORIGINS=http://localhost:3000
 ```
 
@@ -59,16 +66,20 @@ ALLOWED_ORIGINS=http://localhost:3000
 NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
 ```
 
-## 번역 모델 변경
+## AI 모델 변경
 
-`HF_TRANSLATION_MODEL` 값만 바꾸면 됩니다.
+로컬 모델 사용:
 
-예:
+- `AI_PROVIDER=local`
+- `LOCAL_SUMMARIZE_MODEL`, `LOCAL_REFINE_MODEL`, `LOCAL_TRANSLATION_MODEL` 설정
 
-- `google/flan-t5-base`
-- `Helsinki-NLP/opus-mt-ko-en`
+Groq 사용:
 
-모델에 따라 응답 속도/품질이 다를 수 있습니다.
+- `AI_PROVIDER=groq`
+- `GROQ_API_KEY` 설정
+- `GROQ_SUMMARIZE_MODEL`, `GROQ_REFINE_MODEL`, `GROQ_TRANSLATION_MODEL` 설정
+
+로컬 Qwen은 첫 실행 시 모델 다운로드 때문에 시간이 걸릴 수 있습니다.
 
 ## API 예시
 
